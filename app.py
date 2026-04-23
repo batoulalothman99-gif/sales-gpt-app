@@ -2,24 +2,33 @@ import streamlit as st
 
 st.title("Sales GPT App")
 
+# -------- GPT (Gemini) --------
+import google.generativeai as genai
+
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+def nl_to_sql(question):
+    prompt = f"""
+Convert this question into SQL:
+Question: {question}
+
+Only return SQL.
+"""
+    response = model.generate_content(prompt)
+    return response.text
+
+# -------- UI --------
 question = st.text_input("Ask your question:")
 
 if st.button("Submit"):
-
     try:
-        # 1. SQL
+        sql = nl_to_sql(question)
+
         st.subheader("Generated SQL")
-        sql = "SELECT 'test'"
         st.code(sql, language="sql")
 
-        # 2. Result
-        st.subheader("Result")
-        result = "Test result working"
-        st.write(result)
-
-        # 3. Insight
-        st.subheader("Insight")
-        st.write("App is working correctly 🎉")
+        st.success("GPT working ✅")
 
     except Exception as e:
-        st.error(f"Error happened: {e}")
+        st.error(f"Error: {e}")
