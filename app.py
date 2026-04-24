@@ -1,17 +1,59 @@
 import time
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import google.generativeai as genai
 from google.cloud import bigquery
 from google.oauth2 import service_account
-import streamlit.components.v1 as components
 
 # =========================
 # Page config
 # =========================
-st.set_page_config(page_title="Sales GPT App", layout="wide")
-st.title("Sales GPT App")
-st.write("Ask any question about the sales data warehouse.")
+st.set_page_config(
+    page_title="AI Sales Insights Dashboard",
+    layout="wide",
+    page_icon="📊"
+)
+
+# =========================
+# Custom CSS
+# =========================
+st.markdown("""
+<style>
+.main-title {
+    font-size: 42px;
+    font-weight: 800;
+    color: #1f2937;
+}
+.sub-title {
+    font-size: 18px;
+    color: #6b7280;
+    margin-bottom: 25px;
+}
+.card {
+    padding: 20px;
+    border-radius: 16px;
+    background-color: #f9fafb;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 15px;
+}
+.metric-card {
+    padding: 18px;
+    border-radius: 14px;
+    background-color: #eef2ff;
+    border: 1px solid #c7d2fe;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# Header
+# =========================
+st.markdown('<div class="main-title">AI Sales Insights Dashboard</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-title">Ask questions about your sales data (2015-2018) and get instant SQL, results, insights, and recommendations.</div>',
+    unsafe_allow_html=True
+)
 
 # =========================
 # Constants
@@ -20,29 +62,12 @@ PROJECT_ID = "project1-488217"
 DATASET_ID = "dw_sales"
 
 # =========================
-# Helpers
+# Functions: Setup
 # =========================
-def clean_sql(sql: str) -> str:
-    if not sql:
-        return ""
-
-    sql = sql.strip()
-
-    if sql.startswith("```sql"):
-        sql = sql.replace("```sql", "", 1).strip()
-    if sql.startswith("```"):
-        sql = sql.replace("```", "", 1).strip()
-    if sql.endswith("```"):
-        sql = sql[:-3].strip()
-
-    return sql
-
-
 @st.cache_resource
 def get_gemini_model():
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         return genai.GenerativeModel("gemini-2.5-flash")
     except Exception as e:
         st.error(f"Gemini configuration error: {e}")
@@ -57,18 +82,31 @@ def get_bigquery_client():
         )
         return bigquery.Client(credentials=credentials, project=PROJECT_ID)
     except Exception as e:
-        st.error(f"BigQuery client configuration error: {e}")
+        st.error(f"BigQuery configuration error: {e}")
         return None
 
 
-# =========================
-# Initialize services safely
-# =========================
 model = get_gemini_model()
 client = get_bigquery_client()
 
 # =========================
-# Schema context for GPT
+# Sidebar
+# =========================
+with st.sidebar:
+    st.header("System Status")
+    st.write("Gemini:", "✅ Ready" if model else "❌ Not Ready")
+    st.write("BigQuery:", "✅ Ready" if client else "❌ Not Ready")
+
+    st.markdown("---")
+    st.subheader("Sample Questions")
+    st.write("• What is the total sales?")
+    st.write("• What is the average sales in 2022?")
+    st.write("• Show sales by region")
+    st.write("• What are the top 5 products by sales?")
+    st.write("• Show sales by customer segment")
+
+# =========================
+# Schema context
 # =========================
 DW_SCHEMA_CONTEXT = f"""
 You are a SQL expert for Google BigQuery.
@@ -76,7 +114,7 @@ You are a SQL expert for Google BigQuery.
 Project: {PROJECT_ID}
 Dataset: {DATASET_ID}
 
-Tables:
+Available tables:
 
 1) `{PROJECT_ID}.{DATASET_ID}.Fact_sales_updated`
 Columns:
@@ -123,18 +161,43 @@ Columns:
 - `Postal Code`
 - `Region`
 
-Rules:
-- Use BigQuery SQL only
-- Always use fully qualified table names
-- Use backticks for column names with spaces
-- Only return valid SQL
-- Do not return explanations
-- Do not return markdown
+Important rules:
+- Use BigQuery SQL only.
+- Always use fully qualified table names.
+- Use backticks for column names with spaces.
+- Return only valid SQL.
+- Do not return markdown.
+- Do not explain the SQL.
+- Avoid unnecessary joins.
+- If the requested column exists in the fact table, use it directly.
+- For year filtering, prefer EXTRACT(YEAR FROM DATE(`Order Date`)).
+- Only join dim_date if the question explicitly requires date attributes such as quarter, month, or day.
+- Join dim_customer using `Customer ID`.
+- Join dim_product using `Product ID`.
+- Join dim_location using `LocationKey`.
 """
 
 # =========================
-# Functions
+# Helper functions
 # =========================
+def clean_sql(sql: str) -> str:
+    if not sql:
+        return ""
+
+    sql = sql.strip()
+
+    if sql.startswith("```sql"):
+        sql = sql.replace("```sql", "", 1).strip()
+
+    if sql.startswith("```"):
+        sql = sql.replace("```", "", 1).strip()
+
+    if sql.endswith("```"):
+        sql = sql[:-3].strip()
+
+    return sql
+
+
 def nl_to_sql(question: str) -> str:
     if model is None:
         raise ValueError("Gemini model is not initialized.")
@@ -144,18 +207,18 @@ def nl_to_sql(question: str) -> str:
 
 Convert the following user question into a valid BigQuery SQL query.
 
-Question: "{question}"
+Question:
+{question}
 
 Return only SQL.
-Do not explain anything.
 """
+
     response = model.generate_content(prompt)
 
     if not hasattr(response, "text") or not response.text:
-        raise ValueError("Gemini did not return SQL text.")
+        raise ValueError("Gemini did not return SQL.")
 
-    sql = clean_sql(response.text)
-    return sql
+    return clean_sql(response.text)
 
 
 def run_query(sql: str) -> pd.DataFrame:
@@ -163,28 +226,25 @@ def run_query(sql: str) -> pd.DataFrame:
         raise ValueError("BigQuery client is not initialized.")
 
     query_job = client.query(sql)
-    df = query_job.to_dataframe()
-    return df
+    return query_job.to_dataframe()
 
 
-def build_prompt(df: pd.DataFrame, user_question: str) -> str:
+def build_insight_prompt(df: pd.DataFrame, question: str) -> str:
     if df.empty:
         result_text = "The query returned no rows."
     else:
-        # لو الداتا كبيرة، نقصها حتى ما يصير حمل كبير على Gemini
-        preview_df = df.head(20)
-        result_text = preview_df.to_markdown(index=False)
+        result_text = df.head(20).to_markdown(index=False)
 
-    prompt = f"""
+    return f"""
 You are a business analyst.
 
 The user asked:
-{user_question}
+{question}
 
 The SQL result is:
 {result_text}
 
-Please provide your answer in exactly this format:
+Please answer in this exact format:
 
 Summary:
 [2-3 sentences]
@@ -195,7 +255,6 @@ Insight:
 Recommendation:
 [2-3 sentences]
 """
-    return prompt
 
 
 def generate_insight(prompt: str, retry_count: int = 3) -> str:
@@ -207,12 +266,13 @@ def generate_insight(prompt: str, retry_count: int = 3) -> str:
             response = model.generate_content(prompt)
             if hasattr(response, "text") and response.text:
                 return response.text.strip()
-            raise ValueError("Gemini returned an empty insight response.")
         except Exception:
             if attempt < retry_count - 1:
                 time.sleep(2)
             else:
                 raise
+
+    return ""
 
 
 def parse_insight(raw_text: str):
@@ -248,62 +308,84 @@ def parse_insight(raw_text: str):
     }
 
 # =========================
-# Sidebar debug info
+# Main UI
 # =========================
-with st.sidebar:
-    st.subheader("System Status")
-    st.write("Gemini:", "✅ Ready" if model else "❌ Not Ready")
-    st.write("BigQuery:", "✅ Ready" if client else "❌ Not Ready")
+st.markdown("---")
+
+left_col, right_col = st.columns([1.1, 1])
+
+with left_col:
+    st.subheader("Ask AI About Sales Data")
+
+    question = st.text_input(
+        "Enter your question:",
+        placeholder="Example: What is the average sales in 2022?"
+    )
+
+    submit = st.button("Get Insights 🚀", use_container_width=True)
+
+with right_col:
+    st.subheader("How it works")
+    st.markdown("""
+    <div class="card">
+    1. You ask a business question.<br>
+    2. Gemini converts it into SQL.<br>
+    3. BigQuery runs the query on the data warehouse.<br>
+    4. Gemini explains the result and gives recommendations.
+    </div>
+    """, unsafe_allow_html=True)
 
 # =========================
-# UI
+# Processing
 # =========================
-question = st.text_input("Ask your question in English:")
-
-if st.button("Submit"):
+if submit:
     if not question.strip():
         st.warning("Please enter a question.")
     elif model is None or client is None:
-        st.error("App configuration is incomplete. Please check your secrets.")
+        st.error("App configuration is incomplete. Please check Streamlit secrets.")
     else:
         try:
-            # Step 1: Generate SQL
-            with st.spinner("Generating SQL..."):
+            with st.spinner("Generating SQL using Gemini..."):
                 sql = nl_to_sql(question)
 
-            st.subheader("Generated SQL")
+            st.markdown("## Generated SQL")
             st.code(sql, language="sql")
 
-            # Step 2: Run query
             with st.spinner("Running query on BigQuery..."):
                 df = run_query(sql)
 
-            st.subheader("Query Result")
+            st.markdown("## Query Result")
             st.dataframe(df, use_container_width=True)
 
-            # Step 3: Generate GPT insight
-            with st.spinner("Generating insight..."):
-                prompt = build_prompt(df, question)
-                raw_output = generate_insight(prompt)
+            with st.spinner("Generating business insights..."):
+                insight_prompt = build_insight_prompt(df, question)
+                raw_output = generate_insight(insight_prompt)
                 parsed = parse_insight(raw_output)
 
-            st.subheader("Summary")
-            st.write(parsed["summary"] if parsed["summary"] else "No summary generated.")
+            st.markdown("## AI Business Analysis")
 
-            st.subheader("Insight")
-            st.write(parsed["insight"] if parsed["insight"] else "No insight generated.")
+            col1, col2, col3 = st.columns(3)
 
-            st.subheader("Recommendation")
-            st.write(parsed["recommendation"] if parsed["recommendation"] else "No recommendation generated.")
+            with col1:
+                st.markdown("### Summary")
+                st.success(parsed["summary"] if parsed["summary"] else "No summary generated.")
+
+            with col2:
+                st.markdown("### Insight")
+                st.info(parsed["insight"] if parsed["insight"] else "No insight generated.")
+
+            with col3:
+                st.markdown("### Recommendation")
+                st.warning(parsed["recommendation"] if parsed["recommendation"] else "No recommendation generated.")
 
         except Exception as e:
             st.error(f"Error: {e}")
 
 # =========================
-# Optional Power BI section
+# Power BI Dashboard
 # =========================
 st.markdown("---")
-st.subheader("Power BI Dashboard")
+st.markdown("## Power BI Dashboard")
 
 try:
     power_bi_url = st.secrets.get("POWER_BI_EMBED_URL", "")
@@ -311,6 +393,6 @@ except Exception:
     power_bi_url = ""
 
 if power_bi_url:
-    components.iframe(power_bi_url, height=600, scrolling=True)
+    components.iframe(power_bi_url, height=650, scrolling=True)
 else:
     st.info("Add POWER_BI_EMBED_URL to Streamlit secrets if you want to display the dashboard.")
