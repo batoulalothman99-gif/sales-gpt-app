@@ -100,7 +100,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Sample Questions")
     st.write("• What is the total sales?")
-    st.write("• What is the average sales in 2022?")
+    st.write("• What is the average sales in 2017?")
     st.write("• Show sales by region")
     st.write("• What are the top 5 products by sales?")
     st.write("• Show sales by customer segment")
@@ -319,7 +319,7 @@ with left_col:
 
     question = st.text_input(
         "Enter your question:",
-        placeholder="Example: What is the average sales in 2022?"
+        placeholder="Example: What is the average sales in 2017?"
     )
 
     submit = st.button("Get Insights 🚀", use_container_width=True)
